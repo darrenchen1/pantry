@@ -8,6 +8,8 @@
 <meta name="apple-mobile-web-app-title" content="Pantry">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#f2f4f1">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Pantry</title>
 <style>
 :root{--bg:#f2f4f1;--card:#fff;--ink:#1b2420;--mute:#74807a;--line:#e1e6e2;--accent:#2f6f4e;--onaccent:#fff;--warn:#c98a1b;--bad:#c0432f;--chip:#e6ebe7;
@@ -81,6 +83,15 @@ input:disabled{opacity:.45}
 .crow button{color:var(--bad);padding:10px 12px;font-weight:600}
 .cadd{display:flex;gap:10px;margin-bottom:6px}
 .cadd .btn{flex:none;padding:0 20px}
+.chk{width:34px;height:34px;border-radius:50%;border:2px solid var(--accent);flex:none;margin:0 2px 0 -4px;display:grid;place-items:center}
+.chk.on{background:var(--accent)}.chk.on::after{content:'✓';color:var(--onaccent);font-weight:700}
+.item.done .name{text-decoration:line-through;color:var(--mute)}
+.item .delete{color:var(--mute);font-size:1.5rem;width:44px;height:44px}
+.soon{background:var(--card);border-radius:14px;padding:12px 14px 4px;margin-bottom:10px}
+.srow{display:flex;justify-content:space-between;gap:10px;width:100%;padding:10px 0;border-top:1px solid var(--line);text-align:left;min-height:44px;align-items:center}
+.srow em{font-style:normal;font-size:.85rem;font-weight:600;white-space:nowrap}
+.srow .w{color:var(--warn)}.srow .b{color:var(--bad)}
+.crow .ed{color:var(--accent)}
 .err{color:var(--bad);font-size:.9rem;min-height:1.3em;margin-top:10px}
 .fab.alt{right:86px;background:var(--card);color:var(--accent);font-size:1.5rem;border:1px solid var(--line)}
 .mic{width:100%;display:flex;align-items:center;justify-content:center;gap:10px;background:var(--accent);color:var(--onaccent);border-radius:16px;padding:18px;font-size:1.1rem;margin-bottom:10px}
@@ -101,12 +112,14 @@ textarea.vt{min-height:84px;font-family:inherit;font-size:16px;margin-top:10px}
 
 <div id="pantryView">
   <input class="search" type="search" id="search" placeholder="Search ingredients" enterkeyhint="search" autocomplete="off" autocapitalize="off">
+  <div id="soon"></div>
   <div class="chips" id="chips"></div>
   <div id="list"></div>
 </div>
 
 <div id="shopView" hidden>
-  <div class="shop-top"><button class="btn" id="shareBtn">Share list</button></div>
+  <form class="cadd" id="sForm"><input id="sName" placeholder="Add something to buy" enterkeyhint="done" autocomplete="off"><button class="btn" type="submit">Add</button></form>
+  <div class="shop-top"><button class="btn s" id="clearDone" hidden>Clear done</button><button class="btn" id="shareBtn">Share list</button></div>
   <div id="shopList"></div>
 </div>
 
@@ -132,8 +145,9 @@ textarea.vt{min-height:84px;font-family:inherit;font-size:16px;margin-top:10px}
     <label class="tog"><input type="checkbox" id="fBuy"><span>Add to shopping list when low</span></label>
     <div class="row">
       <div><label for="fLow">Low when quantity is</label><input id="fLow" type="number" inputmode="decimal" min="0" step="any" value="1"></div>
-      <div><label for="fExp">Expires (optional)</label><input id="fExp" type="date"></div>
+      <div><label for="fRestock">Restock to</label><input id="fRestock" type="number" inputmode="decimal" min="0" step="any" placeholder="optional"></div>
     </div>
+    <div class="f"><label for="fExp">Expires (optional)</label><input id="fExp" type="date"></div>
     <div class="btns">
       <button type="button" class="btn d" id="fDel" hidden>Delete</button>
       <button type="button" class="btn s" id="fCancel">Cancel</button>
@@ -196,14 +210,22 @@ textarea.vt{min-height:84px;font-family:inherit;font-size:16px;margin-top:10px}
 <script>
 const KEY='pantry-tracker-items';
 const DEFAULT_CATS=['Produce','Dairy','Meat & Fish','Grains & Pasta','Spices','Frozen','Beverages','Other'];
-function loadCats(){try{const a=JSON.parse(localStorage.getItem(KEY+'-cats'));return Array.isArray(a)?a.filter(c=>typeof c==='string'&&c.trim()):[]}catch{return[]}}
-let customCats=loadCats();
-function allCats(){const g=[...DEFAULT_CATS,...customCats.filter(c=>!DEFAULT_CATS.includes(c))];items.forEach(i=>{if(!g.includes(i.cat))g.push(i.cat)});return g}
-function saveCats(){try{localStorage.setItem(KEY+'-cats',JSON.stringify(customCats))}catch{}if(cloudPush)cloudPush()}
+function loadCats(){try{
+  let a=JSON.parse(localStorage.getItem(KEY+'-catlist'));
+  if(!Array.isArray(a)){const old=JSON.parse(localStorage.getItem(KEY+'-cats'));a=[...DEFAULT_CATS,...(Array.isArray(old)?old:[])]}
+  return[...new Set(a.filter(c=>typeof c==='string'&&c.trim()))];
+}catch{return[...DEFAULT_CATS]}}
+let catList=loadCats();
+function allCats(){const g=[...catList];items.forEach(i=>{if(!g.includes(i.cat))g.push(i.cat)});return g}
+function saveCats(){try{localStorage.setItem(KEY+'-catlist',JSON.stringify(catList))}catch{}if(cloudPush)cloudPush()}
+function loadExtras(){try{const a=JSON.parse(localStorage.getItem(KEY+'-extras'));return Array.isArray(a)?a.filter(x=>x&&x.name):[]}catch{return[]}}
+let extras=loadExtras();
+function saveExtras(){try{localStorage.setItem(KEY+'-extras',JSON.stringify(extras))}catch{}if(cloudPush)cloudPush()}
+function pickCat(n){const g=guessCat(n);return catList.includes(g)?g:(catList.includes('Other')?'Other':(catList[0]||'Other'))}
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
-const norm=i=>({id:i.id||uid(),name:String(i.name||'').trim(),qty:Number(i.qty)||0,unit:i.unit||'pcs',cat:i.cat||i.category||'Other',low:Number(i.low??i.lowThreshold??1),buy:!!i.buy,exp:i.exp||'',added:i.added||i.addedAt||Date.now()});
+const norm=i=>({id:i.id||uid(),name:String(i.name||'').trim(),qty:Number(i.qty)||0,unit:i.unit||'pcs',cat:i.cat||i.category||'Other',low:Number(i.low??i.lowThreshold??1),buy:!!i.buy,restock:Number(i.restock)||0,exp:i.exp||'',added:i.added||i.addedAt||Date.now()});
 function load(){try{const a=JSON.parse(localStorage.getItem(KEY));return Array.isArray(a)?a.map(norm).filter(i=>i.name):[]}catch{return[]}}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(items))}catch{}if(cloudPush)cloudPush()}
 let cloudPush=null,syncState='';
@@ -212,12 +234,13 @@ let items=load(),tab='pantry',catF='',editing=null,undoFn=null,toastT;
 const step=u=>{u=u.toLowerCase();return['g','ml'].includes(u)?100:['kg','l'].includes(u)?.5:1};
 const fq=q=>Number.isInteger(q)?q:parseFloat(q.toFixed(2));
 function expDays(i){if(!i.exp)return null;const t=new Date();t.setHours(0,0,0,0);return Math.round((new Date(i.exp+'T00:00')-t)/864e5)}
+const expText=d=>d<0?(d===-1?'Expired yesterday':`Expired ${-d} days ago`):d===0?'Today':d===1?'Tomorrow':`In ${d} days`;
 function status(i){
   const d=expDays(i);
   if(d!==null&&d<0)return{c:'exp',t:'<span class="b">Expired</span>'};
   if(i.qty<=0)return{c:'out',t:'<span class="b">Out of stock</span>'};
   if(i.buy&&i.qty<=i.low)return{c:'low',t:'<span class="w">Running low</span>'};
-  if(d!==null&&d<=3)return{c:'',t:`<span class="w">Expires ${d===0?'today':d===1?'tomorrow':'in '+d+' days'}</span>`};
+  if(d!==null&&d<=5)return{c:'',t:`<span class="w">Expires ${d===0?'today':d===1?'tomorrow':'in '+d+' days'}</span>`};
   return{c:'',t:''};
 }
 const needs=i=>i.buy&&i.qty<=i.low;
@@ -226,10 +249,18 @@ function render(){
   const q=$('#search').value.toLowerCase().trim();
   const low=items.filter(i=>i.qty>0&&needs(i)).length,out=items.filter(i=>i.qty<=0).length;
   $('#stats').textContent=`${items.length} item${items.length!==1?'s':''} · ${low} low · ${out} out`+({synced:' · Synced',syncing:' · Syncing…',offline:' · Offline'}[syncState]||'');
-  const shop=items.filter(needs);
-  $('#shopBadge').hidden=!shop.length;$('#shopBadge').textContent=shop.length;
+  const auto=items.filter(needs).sort((a,b)=>a.name.localeCompare(b.name));
+  const todo=extras.filter(x=>!x.done),done=extras.filter(x=>x.done);
+  const nBuy=auto.length+todo.length;
+  $('#shopBadge').hidden=!nBuy;$('#shopBadge').textContent=nBuy;
+  let sh=auto.map(shopAuto).join('')+todo.map(shopManual).join('');
+  if(done.length)sh+='<div class="cat">In the basket</div>'+done.map(shopManual).join('');
+  $('#shopList').innerHTML=sh||`<div class="empty"><div class="i">✅</div>Nothing to buy. Add something above, or turn on “Add to shopping list when low” for an item.</div>`;
+  $('#clearDone').hidden=!done.length;
+  const soon=items.map(i=>({i,d:expDays(i)})).filter(x=>x.d!==null&&x.d<=5).sort((a,b)=>a.d-b.d);
+  $('#soon').innerHTML=soon.length?'<div class="soon"><div class="cat" style="margin:0 0 4px">Use soon</div>'+soon.map(x=>`<button class="srow" data-edit="${x.i.id}"><span>${esc(x.i.name)}</span><em class="${x.d<0?'b':'w'}">${expText(x.d)}</em></button>`).join('')+'</div>':'';
   $('#names').innerHTML=[...new Set(items.map(i=>i.name))].map(n=>`<option value="${esc(n)}">`).join('');
-  const all=allCats(),used=all.filter(c=>items.some(i=>i.cat===c)||customCats.includes(c));
+  const all=allCats(),used=all.filter(c=>items.some(i=>i.cat===c));
   $('#chips').innerHTML=['All',...used].map(c=>`<button class="chip ${(c==='All'?'':c)===catF?'on':''}" data-cat="${c==='All'?'':esc(c)}">${esc(c)}</button>`).join('')+'<button class="chip" data-manage="1">＋ Category</button>';
   if(catF&&!used.includes(catF))catF='';
   const list=items.filter(i=>(!q||i.name.toLowerCase().includes(q))&&(!catF||i.cat===catF)).sort((a,b)=>a.name.localeCompare(b.name));
@@ -243,7 +274,19 @@ function render(){
     }
     $('#list').innerHTML=h;
   }
-  $('#shopList').innerHTML=shop.length?shop.sort((a,b)=>a.name.localeCompare(b.name)).map(row).join(''):`<div class="empty"><div class="i">✅</div>Nothing to buy. Turn on “Add to shopping list when low” for an item and it shows up here when it runs low.</div>`;
+}
+function shopAuto(i){
+  return `<div class="item low"><button class="chk" data-bought="${i.id}" aria-label="Mark bought"></button><button class="main" data-edit="${i.id}"><div class="name">${esc(i.name)}</div><div class="meta">Have ${fq(i.qty)} ${esc(i.unit)}${i.restock>0?' · restock to '+fq(i.restock):''}</div></button></div>`;
+}
+function shopManual(x){
+  return `<div class="item ${x.done?'done':''}"><button class="chk ${x.done?'on':''}" data-toggle="${x.id}" aria-label="Toggle"></button><div class="main"><div class="name">${esc(x.name)}</div></div><button class="delete" data-delshop="${x.id}" aria-label="Remove">×</button></div>`;
+}
+function bought(id){
+  const it=items.find(i=>i.id===id);if(!it)return;
+  const q=it.restock>0?it.restock:parseFloat(prompt(`How many ${it.name} do you have now?`,String(fq(it.qty+1))));
+  if(isNaN(q)||q<0)return;
+  const old=it.qty;it.qty=q;save();render();
+  toast(`${it.name} restocked`,()=>{it.qty=old;save();render()});
 }
 function row(i){
   const s=status(i);
@@ -261,6 +304,10 @@ function buzz(){try{navigator.vibrate&&navigator.vibrate(8)}catch{}}
 function onList(e){
   const t=e.target.closest('button');if(!t)return;
   if(t.dataset.manage){openCats();return}
+  const D=t.dataset;
+  if(D.bought){bought(D.bought);return}
+  if(D.toggle){const x=extras.find(y=>y.id===D.toggle);if(x){x.done=!x.done;saveExtras();render()}return}
+  if(D.delshop){extras=extras.filter(y=>y.id!==D.delshop);saveExtras();render();return}
   const d=t.dataset,id=d.inc||d.dec||d.edit;
   const it=items.find(i=>i.id===id);
   if(d.cat!==undefined){catF=d.cat;render();return}
@@ -268,7 +315,7 @@ function onList(e){
   if(d.inc||d.dec){it.qty=Math.max(0,fq(it.qty+(d.inc?1:-1)*step(it.unit)));save();render();buzz()}
   else if(d.edit)openSheet(it);
 }
-['#list','#shopList','#chips'].forEach(s=>$(s).addEventListener('click',onList));
+['#list','#shopList','#chips','#soon'].forEach(s=>$(s).addEventListener('click',onList));
 $('#search').addEventListener('input',render);
 
 function setTab(t){
@@ -292,9 +339,9 @@ function addCat(raw){
   const hit=allCats().find(c=>c.toLowerCase()===n.toLowerCase());
   if(hit)return hit;
   const name=n[0].toUpperCase()+n.slice(1);
-  customCats.push(name);saveCats();render();return name;
+  catList.push(name);saveCats();render();return name;
 }
-function syncBuy(){$('#fLow').disabled=!$('#fBuy').checked}
+function syncBuy(){$('#fLow').disabled=$('#fRestock').disabled=!$('#fBuy').checked}
 $('#fBuy').addEventListener('change',syncBuy);
 function openSheet(it){
   editing=it||null;
@@ -302,7 +349,7 @@ function openSheet(it){
   $('#fSave').textContent=it?'Save':'Add';
   $('#fDel').hidden=!it;
   $('#fName').value=it?it.name:'';$('#fQty').value=it?it.qty:1;$('#fUnit').value=it?it.unit:'pcs';
-  fillCat();$('#fCat').value=it?it.cat:(catF||'Produce');prevCat=$('#fCat').value;$('#fLow').value=it?it.low:1;$('#fBuy').checked=it?it.buy:false;syncBuy();$('#fExp').value=it?it.exp:'';
+  fillCat();$('#fCat').value=it?it.cat:(catF||catList[0]||'Other');prevCat=$('#fCat').value;$('#fLow').value=it?it.low:1;$('#fBuy').checked=it?it.buy:false;$('#fRestock').value=it&&it.restock?it.restock:'';syncBuy();$('#fExp').value=it?it.exp:'';
   $('#scrim').classList.add('show');
   if(!it)setTimeout(()=>$('#fName').focus(),60);
 }
@@ -313,7 +360,7 @@ $('#scrim').addEventListener('click',e=>{if(e.target.id==='scrim')closeSheet()})
 
 $('#sheet').addEventListener('submit',e=>{
   e.preventDefault();
-  const v={name:$('#fName').value.trim(),qty:parseFloat($('#fQty').value)||0,unit:$('#fUnit').value.trim()||'pcs',cat:$('#fCat').value,buy:$('#fBuy').checked,low:isNaN(parseFloat($('#fLow').value))?1:parseFloat($('#fLow').value),exp:$('#fExp').value};
+  const v={name:$('#fName').value.trim(),qty:parseFloat($('#fQty').value)||0,unit:$('#fUnit').value.trim()||'pcs',cat:$('#fCat').value,buy:$('#fBuy').checked,restock:parseFloat($('#fRestock').value)||0,low:isNaN(parseFloat($('#fLow').value))?1:parseFloat($('#fLow').value),exp:$('#fExp').value};
   if(!v.name)return;
   if(editing)Object.assign(editing,v);
   else{
@@ -331,9 +378,9 @@ $('#fDel').onclick=()=>{
 };
 
 $('#shareBtn').onclick=async()=>{
-  const shop=items.filter(needs).sort((a,b)=>a.name.localeCompare(b.name));
-  if(!shop.length)return toast('Nothing to buy yet');
-  const text='Shopping list\n'+shop.map(i=>'• '+i.name).join('\n');
+  const names=[...items.filter(needs).sort((a,b)=>a.name.localeCompare(b.name)).map(i=>i.name),...extras.filter(x=>!x.done).map(x=>x.name)];
+  if(!names.length)return toast('Nothing to buy yet');
+  const text='Shopping list\n'+names.map(n=>'• '+n).join('\n');
   try{if(navigator.share){await navigator.share({text});return}}catch(e){if(e.name==='AbortError')return}
   copy(text,'List copied');
 };
@@ -358,20 +405,40 @@ $('#bRestore').onclick=()=>{
 };
 
 /* ---- Category manager ---- */
+const cleanCat=t=>(t||'').trim().replace(/\s+/g,' ').slice(0,24);
 function renderCatList(){
-  $('#cList').innerHTML=DEFAULT_CATS.map(c=>`<div class="crow"><span>${esc(c)}<small>built in</small></span></div>`).join('')+
-    customCats.map(c=>`<div class="crow"><span>${esc(c)}<small>${items.filter(i=>i.cat===c).length} items</small></span><button data-rm="${esc(c)}">Remove</button></div>`).join('');
+  $('#cList').innerHTML=catList.map((c,i)=>`<div class="crow"><span>${esc(c)}<small>${items.filter(x=>x.cat===c).length}</small></span><span><button class="ed" data-ren="${i}">Rename</button><button data-rm="${i}">Delete</button></span></div>`).join('')||'<p class="sub">No categories yet. Add one above.</p>';
 }
 function openCats(){renderCatList();$('#cName').value='';$('#cScrim').classList.add('show')}
 $('#cForm').addEventListener('submit',e=>{e.preventDefault();const n=addCat($('#cName').value);$('#cName').value='';if(n)renderCatList()});
 $('#cList').addEventListener('click',e=>{
-  const b=e.target.closest('button[data-rm]');if(!b)return;
-  const c=b.dataset.rm,n=items.filter(i=>i.cat===c).length;
-  if(n)return toast(`${n} item${n!==1?'s':''} still use ${c}. Move them first.`);
-  customCats=customCats.filter(x=>x!==c);saveCats();renderCatList();render();
+  const b=e.target.closest('button');if(!b)return;
+  const d=b.dataset;
+  if(d.ren!==undefined){
+    const i=+d.ren,c=catList[i],n=cleanCat(prompt('Rename category',c));
+    if(!n||n===c)return;
+    if(catList.some((x,j)=>j!==i&&x.toLowerCase()===n.toLowerCase()))return toast('That category already exists');
+    items.forEach(x=>{if(x.cat===c)x.cat=n});if(catF===c)catF=n;
+    catList[i]=n;save();saveCats();renderCatList();render();
+  }else if(d.rm!==undefined){
+    const i=+d.rm,c=catList[i],n=items.filter(x=>x.cat===c).length;
+    if(n&&c==='Other')return toast('Move the items out of Other first.');
+    if(n&&!confirm(`Delete ${c}? Its ${n} item${n!==1?'s':''} will move to Other.`))return;
+    if(n){if(!catList.includes('Other'))catList.push('Other');items.forEach(x=>{if(x.cat===c)x.cat='Other'});save()}
+    if(catF===c)catF='';
+    catList=catList.filter(x=>x!==c);saveCats();renderCatList();render();
+  }
 });
 $('#cClose').onclick=()=>$('#cScrim').classList.remove('show');
 $('#cScrim').addEventListener('click',e=>{if(e.target.id==='cScrim')$('#cScrim').classList.remove('show')});
+
+/* ---- Shopping list extras ---- */
+$('#sForm').addEventListener('submit',e=>{
+  e.preventDefault();const n=$('#sName').value.trim();if(!n)return;
+  extras.push({id:uid(),name:n[0].toUpperCase()+n.slice(1),done:false});
+  $('#sName').value='';saveExtras();render();
+});
+$('#clearDone').onclick=()=>{extras=extras.filter(x=>!x.done);saveExtras();render()};
 
 /* ---- Voice input ---- */
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -395,7 +462,7 @@ function parseChunk(s){
   if(w[0]==='of')w.shift();
   const name=w.join(' ').trim();
   if(!name)return null;
-  return{name:name[0].toUpperCase()+name.slice(1),qty,unit,cat:guessCat(name)};
+  return{name:name[0].toUpperCase()+name.slice(1),qty,unit,cat:pickCat(name)};
 }
 function parseVoice(t){
   return t.toLowerCase().replace(LEAD,'').split(/,|;|\n|\.\s|\.$|\band\b|\bthen\b|\balso\b|\bplus\b/)
@@ -449,6 +516,7 @@ $('#vAdd').onclick=()=>{
   const n=parsed.length;save();closeVoice();render();toast(`Added ${n} item${n!==1?'s':''}`);
 };
 
+if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 render();
 </script>
 <script type="module">
@@ -474,7 +542,7 @@ const showGate=on=>gate.classList.toggle('show',on);
 const setSync=s=>{syncState=s;render()};
 const MSG={'auth/invalid-credential':'Wrong email or password.','auth/wrong-password':'Wrong email or password.','auth/user-not-found':'No account with that email. Tap Create account.','auth/email-already-in-use':'That email already has an account. Tap Sign in.','auth/weak-password':'Password needs at least 6 characters.','auth/invalid-email':'That email address looks wrong.','auth/too-many-requests':'Too many tries. Wait a minute and retry.','auth/network-request-failed':'No internet connection.','auth/unauthorized-domain':'Add this site in Firebase: Authentication, Settings, Authorized domains.','auth/operation-not-allowed':'Turn on Email/Password in Firebase Authentication.','auth/api-key-not-valid.-please-pass-a-valid-api-key.':'The Firebase API key is wrong.'};
 
-function push(){if(ref)setDoc(ref,{items,cats:customCats,updated:Date.now()}).catch(e=>toast('Could not save: '+e.code))}
+function push(){if(ref)setDoc(ref,{items,catList,extras,updated:Date.now()}).catch(e=>toast('Could not save: '+e.code))}
 
 onAuthStateChanged(auth,user=>{
   if(unsub){unsub();unsub=null}
@@ -487,18 +555,21 @@ onAuthStateChanged(auth,user=>{
   unsub=onSnapshot(ref,snap=>{
     if(snap.metadata.hasPendingWrites)return;
     const cloud=snap.exists()?(snap.data().items||[]).map(norm).filter(i=>i.name):[];
-    const cc=(snap.exists()&&Array.isArray(snap.data().cats)?snap.data().cats:[]).filter(c=>typeof c==='string');
+    const D=snap.exists()?snap.data():{};
+    const cc=Array.isArray(D.catList)?D.catList:(snap.exists()?[...DEFAULT_CATS,...(Array.isArray(D.cats)?D.cats:[])]:null);
+    const cx=(Array.isArray(D.extras)?D.extras:[]).filter(x=>x&&x.name).map(x=>({id:x.id||uid(),name:String(x.name),done:!!x.done}));
     if(first){
       if(!snap.exists()&&snap.metadata.fromCache)return;
       first=false;
       const same=(c,l)=>c.id===l.id||(c.name.toLowerCase()===l.name.toLowerCase()&&c.unit===l.unit);
       const extra=items.filter(l=>!cloud.some(c=>same(c,l)));
       items=cloud.concat(extra);
-      const merged=[...new Set([...cc,...customCats])];
-      const catsNew=merged.length!==cc.length;customCats=merged;
-      if(extra.length||catsNew||!snap.exists())push();
-    }else{items=cloud;customCats=cc}
-    try{localStorage.setItem(KEY,JSON.stringify(items));localStorage.setItem(KEY+'-cats',JSON.stringify(customCats))}catch{}
+      const ex2=extras.filter(l=>!cx.some(c=>c.id===l.id));
+      extras=cx.concat(ex2);
+      if(cc)catList=[...new Set(cc.filter(c=>typeof c==='string'))];
+      if(extra.length||ex2.length||!snap.exists()||!Array.isArray(D.catList))push();
+    }else{items=cloud;extras=cx;if(cc)catList=[...new Set(cc.filter(c=>typeof c==='string'))]}
+    try{localStorage.setItem(KEY,JSON.stringify(items));localStorage.setItem(KEY+'-catlist',JSON.stringify(catList));localStorage.setItem(KEY+'-extras',JSON.stringify(extras))}catch{}
     if(editing)editing=items.find(i=>i.id===editing.id)||null;
     setSync(snap.metadata.fromCache?'offline':'synced');
   },err=>{setSync('');toast(err.code==='permission-denied'?'Sync blocked. Check the Firestore rules.':'Sync error: '+err.code)});
@@ -520,7 +591,7 @@ $('#gSkip').onclick=()=>{localStorage.setItem('pantry-skip','1');showGate(false)
 $('#authBtn').onclick=async()=>{
   if(auth.currentUser){
     if(!confirm('Sign out? This clears the list from this device. It stays safe in your account.'))return;
-    await signOut(auth);items=[];customCats=[];try{localStorage.removeItem(KEY);localStorage.removeItem(KEY+'-cats')}catch{}render();
+    await signOut(auth);items=[];extras=[];catList=[...DEFAULT_CATS];try{['','-cats','-catlist','-extras'].forEach(k=>localStorage.removeItem(KEY+k))}catch{}render();
   }else{localStorage.removeItem('pantry-skip');showGate(true)}
 };
 </script>
