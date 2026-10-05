@@ -73,6 +73,14 @@ textarea{min-height:140px;font-family:ui-monospace,monospace;font-size:13px}
 .gate form{width:100%;max-width:380px}
 .gate input{margin-top:10px}
 .gate .btns{flex-direction:column}
+input[type=checkbox]{width:24px;height:24px;min-height:0;padding:0;appearance:auto;-webkit-appearance:checkbox;accent-color:var(--accent);flex:none}
+.tog{display:flex;align-items:center;gap:12px;padding:6px 2px 12px;font-size:1rem;color:var(--ink);margin:0}
+input:disabled{opacity:.45}
+.crow{display:flex;justify-content:space-between;align-items:center;background:var(--card);border-radius:12px;padding:6px 6px 6px 14px;margin-top:6px;min-height:50px}
+.crow small{color:var(--mute);margin-left:6px}
+.crow button{color:var(--bad);padding:10px 12px;font-weight:600}
+.cadd{display:flex;gap:10px;margin-bottom:6px}
+.cadd .btn{flex:none;padding:0 20px}
 .err{color:var(--bad);font-size:.9rem;min-height:1.3em;margin-top:10px}
 .fab.alt{right:86px;background:var(--card);color:var(--accent);font-size:1.5rem;border:1px solid var(--line)}
 .mic{width:100%;display:flex;align-items:center;justify-content:center;gap:10px;background:var(--accent);color:var(--onaccent);border-radius:16px;padding:18px;font-size:1.1rem;margin-bottom:10px}
@@ -121,8 +129,9 @@ textarea.vt{min-height:84px;font-family:inherit;font-size:16px;margin-top:10px}
       <div><label for="fUnit">Unit</label><input id="fUnit" value="pcs" autocapitalize="off"></div>
     </div>
     <div class="f"><label for="fCat">Category</label><select id="fCat"></select></div>
+    <label class="tog"><input type="checkbox" id="fBuy"><span>Add to shopping list when low</span></label>
     <div class="row">
-      <div><label for="fLow">Low stock at</label><input id="fLow" type="number" inputmode="decimal" min="0" step="any" value="1"></div>
+      <div><label for="fLow">Low when quantity is</label><input id="fLow" type="number" inputmode="decimal" min="0" step="any" value="1"></div>
       <div><label for="fExp">Expires (optional)</label><input id="fExp" type="date"></div>
     </div>
     <div class="btns">
@@ -143,6 +152,15 @@ textarea.vt{min-height:84px;font-family:inherit;font-size:16px;margin-top:10px}
       <button class="btn s" id="bRestore">Restore</button>
       <button class="btn" id="bCopy">Copy</button>
     </div>
+  </div>
+</div>
+
+<div class="scrim" id="cScrim">
+  <div class="sheet">
+    <h2>Categories</h2>
+    <form class="cadd" id="cForm"><input id="cName" placeholder="New category name" maxlength="24" autocapitalize="words" enterkeyhint="done"><button class="btn" type="submit">Add</button></form>
+    <div id="cList"></div>
+    <div class="btns"><button type="button" class="btn s" id="cClose">Done</button></div>
   </div>
 </div>
 
@@ -177,11 +195,15 @@ textarea.vt{min-height:84px;font-family:inherit;font-size:16px;margin-top:10px}
 
 <script>
 const KEY='pantry-tracker-items';
-const CATS=['Produce','Dairy','Meat & Fish','Grains & Pasta','Spices','Frozen','Beverages','Other'];
+const DEFAULT_CATS=['Produce','Dairy','Meat & Fish','Grains & Pasta','Spices','Frozen','Beverages','Other'];
+function loadCats(){try{const a=JSON.parse(localStorage.getItem(KEY+'-cats'));return Array.isArray(a)?a.filter(c=>typeof c==='string'&&c.trim()):[]}catch{return[]}}
+let customCats=loadCats();
+function allCats(){const g=[...DEFAULT_CATS,...customCats.filter(c=>!DEFAULT_CATS.includes(c))];items.forEach(i=>{if(!g.includes(i.cat))g.push(i.cat)});return g}
+function saveCats(){try{localStorage.setItem(KEY+'-cats',JSON.stringify(customCats))}catch{}if(cloudPush)cloudPush()}
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
-const norm=i=>({id:i.id||uid(),name:String(i.name||'').trim(),qty:Number(i.qty)||0,unit:i.unit||'pcs',cat:i.cat||i.category||'Other',low:Number(i.low??i.lowThreshold??1),exp:i.exp||'',added:i.added||i.addedAt||Date.now()});
+const norm=i=>({id:i.id||uid(),name:String(i.name||'').trim(),qty:Number(i.qty)||0,unit:i.unit||'pcs',cat:i.cat||i.category||'Other',low:Number(i.low??i.lowThreshold??1),buy:!!i.buy,exp:i.exp||'',added:i.added||i.addedAt||Date.now()});
 function load(){try{const a=JSON.parse(localStorage.getItem(KEY));return Array.isArray(a)?a.map(norm).filter(i=>i.name):[]}catch{return[]}}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(items))}catch{}if(cloudPush)cloudPush()}
 let cloudPush=null,syncState='';
@@ -194,11 +216,11 @@ function status(i){
   const d=expDays(i);
   if(d!==null&&d<0)return{c:'exp',t:'<span class="b">Expired</span>'};
   if(i.qty<=0)return{c:'out',t:'<span class="b">Out of stock</span>'};
-  if(i.qty<=i.low)return{c:'low',t:'<span class="w">Running low</span>'};
+  if(i.buy&&i.qty<=i.low)return{c:'low',t:'<span class="w">Running low</span>'};
   if(d!==null&&d<=3)return{c:'',t:`<span class="w">Expires ${d===0?'today':d===1?'tomorrow':'in '+d+' days'}</span>`};
   return{c:'',t:''};
 }
-const needs=i=>i.qty<=i.low;
+const needs=i=>i.buy&&i.qty<=i.low;
 
 function render(){
   const q=$('#search').value.toLowerCase().trim();
@@ -207,21 +229,21 @@ function render(){
   const shop=items.filter(needs);
   $('#shopBadge').hidden=!shop.length;$('#shopBadge').textContent=shop.length;
   $('#names').innerHTML=[...new Set(items.map(i=>i.name))].map(n=>`<option value="${esc(n)}">`).join('');
-  const used=CATS.filter(c=>items.some(i=>i.cat===c));
-  $('#chips').innerHTML=['All',...used].map(c=>`<button class="chip ${(c==='All'?'':c)===catF?'on':''}" data-cat="${c==='All'?'':esc(c)}">${esc(c)}</button>`).join('');
+  const all=allCats(),used=all.filter(c=>items.some(i=>i.cat===c)||customCats.includes(c));
+  $('#chips').innerHTML=['All',...used].map(c=>`<button class="chip ${(c==='All'?'':c)===catF?'on':''}" data-cat="${c==='All'?'':esc(c)}">${esc(c)}</button>`).join('')+'<button class="chip" data-manage="1">＋ Category</button>';
   if(catF&&!used.includes(catF))catF='';
   const list=items.filter(i=>(!q||i.name.toLowerCase().includes(q))&&(!catF||i.cat===catF)).sort((a,b)=>a.name.localeCompare(b.name));
   if(!list.length){
     $('#list').innerHTML=`<div class="empty"><div class="i">🍽️</div>${items.length?'Nothing matches your search.':'Your pantry is empty.<br>Tap + to add your first ingredient.'}</div>`;
   }else{
     let h='';
-    for(const c of CATS){
+    for(const c of all){
       const g=list.filter(i=>i.cat===c);if(!g.length)continue;
       h+=`<div class="cat">${esc(c)}</div>`+g.map(row).join('');
     }
     $('#list').innerHTML=h;
   }
-  $('#shopList').innerHTML=shop.length?shop.sort((a,b)=>a.name.localeCompare(b.name)).map(row).join(''):`<div class="empty"><div class="i">✅</div>Nothing to buy. Items show up here when they run low or out.</div>`;
+  $('#shopList').innerHTML=shop.length?shop.sort((a,b)=>a.name.localeCompare(b.name)).map(row).join(''):`<div class="empty"><div class="i">✅</div>Nothing to buy. Turn on “Add to shopping list when low” for an item and it shows up here when it runs low.</div>`;
 }
 function row(i){
   const s=status(i);
@@ -238,6 +260,7 @@ $('#toastUndo').onclick=()=>{if(undoFn)undoFn();undoFn=null;$('#toast').classLis
 function buzz(){try{navigator.vibrate&&navigator.vibrate(8)}catch{}}
 function onList(e){
   const t=e.target.closest('button');if(!t)return;
+  if(t.dataset.manage){openCats();return}
   const d=t.dataset,id=d.inc||d.dec||d.edit;
   const it=items.find(i=>i.id===id);
   if(d.cat!==undefined){catF=d.cat;render();return}
@@ -256,14 +279,30 @@ function setTab(t){
 }
 $('#tabPantry').onclick=()=>setTab('pantry');$('#tabShop').onclick=()=>setTab('shop');
 
-$('#fCat').innerHTML=CATS.map(c=>`<option>${esc(c)}</option>`).join('');
+function fillCat(){$('#fCat').innerHTML=allCats().map(c=>`<option>${esc(c)}</option>`).join('')+'<option value="__new">＋ New category…</option>'}
+let prevCat='Produce';
+$('#fCat').addEventListener('change',()=>{
+  if($('#fCat').value!=='__new'){prevCat=$('#fCat').value;return}
+  const n=addCat(prompt('New category name')||'');
+  if(n){fillCat();$('#fCat').value=n;prevCat=n}else $('#fCat').value=prevCat;
+});
+function addCat(raw){
+  const n=raw.trim().replace(/\s+/g,' ').slice(0,24);
+  if(!n)return null;
+  const hit=allCats().find(c=>c.toLowerCase()===n.toLowerCase());
+  if(hit)return hit;
+  const name=n[0].toUpperCase()+n.slice(1);
+  customCats.push(name);saveCats();render();return name;
+}
+function syncBuy(){$('#fLow').disabled=!$('#fBuy').checked}
+$('#fBuy').addEventListener('change',syncBuy);
 function openSheet(it){
   editing=it||null;
   $('#sheetTitle').textContent=it?'Edit ingredient':'Add ingredient';
   $('#fSave').textContent=it?'Save':'Add';
   $('#fDel').hidden=!it;
   $('#fName').value=it?it.name:'';$('#fQty').value=it?it.qty:1;$('#fUnit').value=it?it.unit:'pcs';
-  $('#fCat').value=it?it.cat:(catF||'Produce');$('#fLow').value=it?it.low:1;$('#fExp').value=it?it.exp:'';
+  fillCat();$('#fCat').value=it?it.cat:(catF||'Produce');prevCat=$('#fCat').value;$('#fLow').value=it?it.low:1;$('#fBuy').checked=it?it.buy:false;syncBuy();$('#fExp').value=it?it.exp:'';
   $('#scrim').classList.add('show');
   if(!it)setTimeout(()=>$('#fName').focus(),60);
 }
@@ -274,7 +313,7 @@ $('#scrim').addEventListener('click',e=>{if(e.target.id==='scrim')closeSheet()})
 
 $('#sheet').addEventListener('submit',e=>{
   e.preventDefault();
-  const v={name:$('#fName').value.trim(),qty:parseFloat($('#fQty').value)||0,unit:$('#fUnit').value.trim()||'pcs',cat:$('#fCat').value,low:parseFloat($('#fLow').value)||0,exp:$('#fExp').value};
+  const v={name:$('#fName').value.trim(),qty:parseFloat($('#fQty').value)||0,unit:$('#fUnit').value.trim()||'pcs',cat:$('#fCat').value,buy:$('#fBuy').checked,low:isNaN(parseFloat($('#fLow').value))?1:parseFloat($('#fLow').value),exp:$('#fExp').value};
   if(!v.name)return;
   if(editing)Object.assign(editing,v);
   else{
@@ -317,6 +356,22 @@ $('#bRestore').onclick=()=>{
     save();render();$('#bScrim').classList.remove('show');toast(`Restored ${n} item${n!==1?'s':''}`);
   }catch{toast('That text is not a valid backup')}
 };
+
+/* ---- Category manager ---- */
+function renderCatList(){
+  $('#cList').innerHTML=DEFAULT_CATS.map(c=>`<div class="crow"><span>${esc(c)}<small>built in</small></span></div>`).join('')+
+    customCats.map(c=>`<div class="crow"><span>${esc(c)}<small>${items.filter(i=>i.cat===c).length} items</small></span><button data-rm="${esc(c)}">Remove</button></div>`).join('');
+}
+function openCats(){renderCatList();$('#cName').value='';$('#cScrim').classList.add('show')}
+$('#cForm').addEventListener('submit',e=>{e.preventDefault();const n=addCat($('#cName').value);$('#cName').value='';if(n)renderCatList()});
+$('#cList').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-rm]');if(!b)return;
+  const c=b.dataset.rm,n=items.filter(i=>i.cat===c).length;
+  if(n)return toast(`${n} item${n!==1?'s':''} still use ${c}. Move them first.`);
+  customCats=customCats.filter(x=>x!==c);saveCats();renderCatList();render();
+});
+$('#cClose').onclick=()=>$('#cScrim').classList.remove('show');
+$('#cScrim').addEventListener('click',e=>{if(e.target.id==='cScrim')$('#cScrim').classList.remove('show')});
 
 /* ---- Voice input ---- */
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -389,7 +444,7 @@ $('#vAdd').onclick=()=>{
   parsed.forEach(p=>{
     const same=items.find(i=>i.name.toLowerCase()===p.name.toLowerCase()&&i.unit===p.unit);
     if(same)same.qty=fq(same.qty+p.qty);
-    else items.push({id:uid(),added:Date.now(),low:p.unit==='pcs'||p.unit==='cans'?1:0,exp:'',...p});
+    else items.push({id:uid(),added:Date.now(),buy:false,low:1,exp:'',...p});
   });
   const n=parsed.length;save();closeVoice();render();toast(`Added ${n} item${n!==1?'s':''}`);
 };
@@ -419,7 +474,7 @@ const showGate=on=>gate.classList.toggle('show',on);
 const setSync=s=>{syncState=s;render()};
 const MSG={'auth/invalid-credential':'Wrong email or password.','auth/wrong-password':'Wrong email or password.','auth/user-not-found':'No account with that email. Tap Create account.','auth/email-already-in-use':'That email already has an account. Tap Sign in.','auth/weak-password':'Password needs at least 6 characters.','auth/invalid-email':'That email address looks wrong.','auth/too-many-requests':'Too many tries. Wait a minute and retry.','auth/network-request-failed':'No internet connection.','auth/unauthorized-domain':'Add this site in Firebase: Authentication, Settings, Authorized domains.','auth/operation-not-allowed':'Turn on Email/Password in Firebase Authentication.','auth/api-key-not-valid.-please-pass-a-valid-api-key.':'The Firebase API key is wrong.'};
 
-function push(){if(ref)setDoc(ref,{items,updated:Date.now()}).catch(e=>toast('Could not save: '+e.code))}
+function push(){if(ref)setDoc(ref,{items,cats:customCats,updated:Date.now()}).catch(e=>toast('Could not save: '+e.code))}
 
 onAuthStateChanged(auth,user=>{
   if(unsub){unsub();unsub=null}
@@ -432,15 +487,18 @@ onAuthStateChanged(auth,user=>{
   unsub=onSnapshot(ref,snap=>{
     if(snap.metadata.hasPendingWrites)return;
     const cloud=snap.exists()?(snap.data().items||[]).map(norm).filter(i=>i.name):[];
+    const cc=(snap.exists()&&Array.isArray(snap.data().cats)?snap.data().cats:[]).filter(c=>typeof c==='string');
     if(first){
       if(!snap.exists()&&snap.metadata.fromCache)return;
       first=false;
       const same=(c,l)=>c.id===l.id||(c.name.toLowerCase()===l.name.toLowerCase()&&c.unit===l.unit);
       const extra=items.filter(l=>!cloud.some(c=>same(c,l)));
       items=cloud.concat(extra);
-      if(extra.length||!snap.exists())push();
-    }else items=cloud;
-    try{localStorage.setItem(KEY,JSON.stringify(items))}catch{}
+      const merged=[...new Set([...cc,...customCats])];
+      const catsNew=merged.length!==cc.length;customCats=merged;
+      if(extra.length||catsNew||!snap.exists())push();
+    }else{items=cloud;customCats=cc}
+    try{localStorage.setItem(KEY,JSON.stringify(items));localStorage.setItem(KEY+'-cats',JSON.stringify(customCats))}catch{}
     if(editing)editing=items.find(i=>i.id===editing.id)||null;
     setSync(snap.metadata.fromCache?'offline':'synced');
   },err=>{setSync('');toast(err.code==='permission-denied'?'Sync blocked. Check the Firestore rules.':'Sync error: '+err.code)});
@@ -462,7 +520,7 @@ $('#gSkip').onclick=()=>{localStorage.setItem('pantry-skip','1');showGate(false)
 $('#authBtn').onclick=async()=>{
   if(auth.currentUser){
     if(!confirm('Sign out? This clears the list from this device. It stays safe in your account.'))return;
-    await signOut(auth);items=[];try{localStorage.removeItem(KEY)}catch{}render();
+    await signOut(auth);items=[];customCats=[];try{localStorage.removeItem(KEY);localStorage.removeItem(KEY+'-cats')}catch{}render();
   }else{localStorage.removeItem('pantry-skip');showGate(true)}
 };
 </script>
