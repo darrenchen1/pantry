@@ -68,6 +68,12 @@ textarea{min-height:140px;font-family:ui-monospace,monospace;font-size:13px}
 .toast.show{display:flex}
 .toast button{color:var(--accent);font-weight:700;padding:4px 8px;filter:brightness(1.3)}
 .shop-top{display:flex;gap:10px;margin:8px 0 4px}
+.gate{position:fixed;inset:0;background:var(--bg);z-index:30;display:none;align-items:center;justify-content:center;padding:24px}
+.gate.show{display:flex}
+.gate form{width:100%;max-width:380px}
+.gate input{margin-top:10px}
+.gate .btns{flex-direction:column}
+.err{color:var(--bad);font-size:.9rem;min-height:1.3em;margin-top:10px}
 .fab.alt{right:86px;background:var(--card);color:var(--accent);font-size:1.5rem;border:1px solid var(--line)}
 .mic{width:100%;display:flex;align-items:center;justify-content:center;gap:10px;background:var(--accent);color:var(--onaccent);border-radius:16px;padding:18px;font-size:1.1rem;margin-bottom:10px}
 .mic.on{background:var(--bad);color:#fff}
@@ -82,7 +88,7 @@ textarea.vt{min-height:84px;font-family:inherit;font-size:16px;margin-top:10px}
 
 <header>
   <div><h1>Pantry</h1><p class="sub" id="stats"></p></div>
-  <button class="link" id="backupBtn">Backup</button>
+  <div style="display:flex;gap:4px"><button class="link" id="authBtn">Sign in</button><button class="link" id="backupBtn">Backup</button></div>
 </header>
 
 <div id="pantryView">
@@ -140,6 +146,21 @@ textarea.vt{min-height:84px;font-family:inherit;font-size:16px;margin-top:10px}
   </div>
 </div>
 
+<div class="gate" id="gate">
+  <form id="gForm">
+    <h1>🥫 Pantry</h1>
+    <p class="sub">Sign in to see the same list on every device.</p>
+    <input id="gEmail" type="email" placeholder="Email" autocomplete="username" autocapitalize="off" autocorrect="off" required>
+    <input id="gPass" type="password" placeholder="Password (6+ characters)" autocomplete="current-password" required>
+    <div class="err" id="gErr"></div>
+    <div class="btns">
+      <button type="submit" class="btn" id="gIn">Sign in</button>
+      <button type="button" class="btn s" id="gNew">Create account</button>
+      <button type="button" class="link" id="gSkip">Continue without an account</button>
+    </div>
+  </form>
+</div>
+
 <div class="scrim" id="vScrim">
   <div class="sheet">
     <h2>Add by voice</h2>
@@ -162,7 +183,8 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const norm=i=>({id:i.id||uid(),name:String(i.name||'').trim(),qty:Number(i.qty)||0,unit:i.unit||'pcs',cat:i.cat||i.category||'Other',low:Number(i.low??i.lowThreshold??1),exp:i.exp||'',added:i.added||i.addedAt||Date.now()});
 function load(){try{const a=JSON.parse(localStorage.getItem(KEY));return Array.isArray(a)?a.map(norm).filter(i=>i.name):[]}catch{return[]}}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(items))}catch{}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(items))}catch{}if(cloudPush)cloudPush()}
+let cloudPush=null,syncState='';
 let items=load(),tab='pantry',catF='',editing=null,undoFn=null,toastT;
 
 const step=u=>{u=u.toLowerCase();return['g','ml'].includes(u)?100:['kg','l'].includes(u)?.5:1};
@@ -181,7 +203,7 @@ const needs=i=>i.qty<=i.low;
 function render(){
   const q=$('#search').value.toLowerCase().trim();
   const low=items.filter(i=>i.qty>0&&needs(i)).length,out=items.filter(i=>i.qty<=0).length;
-  $('#stats').textContent=`${items.length} item${items.length!==1?'s':''} · ${low} low · ${out} out`;
+  $('#stats').textContent=`${items.length} item${items.length!==1?'s':''} · ${low} low · ${out} out`+({synced:' · Synced',syncing:' · Syncing…',offline:' · Offline'}[syncState]||'');
   const shop=items.filter(needs);
   $('#shopBadge').hidden=!shop.length;$('#shopBadge').textContent=shop.length;
   $('#names').innerHTML=[...new Set(items.map(i=>i.name))].map(n=>`<option value="${esc(n)}">`).join('');
@@ -373,6 +395,76 @@ $('#vAdd').onclick=()=>{
 };
 
 render();
+</script>
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getAuth,onAuthStateChanged,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {initializeFirestore,getFirestore,persistentLocalCache,persistentMultipleTabManager,doc,onSnapshot,setDoc} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig={
+  apiKey:"AIzaSyCkFFdDXL8oeCpS_t7fypdUt5m3Kw7HfJA",
+  authDomain:"pantry2-6110a.firebaseapp.com",
+  projectId:"pantry2-6110a",
+  storageBucket:"pantry2-6110a.firebasestorage.app",
+  messagingSenderId:"611704725665",
+  appId:"1:611704725665:web:8196cd3961da60017d90e0"
+};
+const app=initializeApp(firebaseConfig),auth=getAuth(app);
+let db;
+try{db=initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})})}catch{db=getFirestore(app)}
+
+const gate=$('#gate'),gErr=$('#gErr');
+let unsub=null,ref=null,timer=null;
+const showGate=on=>gate.classList.toggle('show',on);
+const setSync=s=>{syncState=s;render()};
+const MSG={'auth/invalid-credential':'Wrong email or password.','auth/wrong-password':'Wrong email or password.','auth/user-not-found':'No account with that email. Tap Create account.','auth/email-already-in-use':'That email already has an account. Tap Sign in.','auth/weak-password':'Password needs at least 6 characters.','auth/invalid-email':'That email address looks wrong.','auth/too-many-requests':'Too many tries. Wait a minute and retry.','auth/network-request-failed':'No internet connection.','auth/unauthorized-domain':'Add this site in Firebase: Authentication, Settings, Authorized domains.','auth/operation-not-allowed':'Turn on Email/Password in Firebase Authentication.','auth/api-key-not-valid.-please-pass-a-valid-api-key.':'The Firebase API key is wrong.'};
+
+function push(){if(ref)setDoc(ref,{items,updated:Date.now()}).catch(e=>toast('Could not save: '+e.code))}
+
+onAuthStateChanged(auth,user=>{
+  if(unsub){unsub();unsub=null}
+  cloudPush=null;ref=null;
+  $('#authBtn').textContent=user?'Sign out':'Sign in';
+  if(!user){setSync('');if(!localStorage.getItem('pantry-skip'))showGate(true);return}
+  localStorage.removeItem('pantry-skip');showGate(false);
+  ref=doc(db,'users',user.uid);setSync('syncing');
+  let first=true;
+  unsub=onSnapshot(ref,snap=>{
+    if(snap.metadata.hasPendingWrites)return;
+    const cloud=snap.exists()?(snap.data().items||[]).map(norm).filter(i=>i.name):[];
+    if(first){
+      if(!snap.exists()&&snap.metadata.fromCache)return;
+      first=false;
+      const same=(c,l)=>c.id===l.id||(c.name.toLowerCase()===l.name.toLowerCase()&&c.unit===l.unit);
+      const extra=items.filter(l=>!cloud.some(c=>same(c,l)));
+      items=cloud.concat(extra);
+      if(extra.length||!snap.exists())push();
+    }else items=cloud;
+    try{localStorage.setItem(KEY,JSON.stringify(items))}catch{}
+    if(editing)editing=items.find(i=>i.id===editing.id)||null;
+    setSync(snap.metadata.fromCache?'offline':'synced');
+  },err=>{setSync('');toast(err.code==='permission-denied'?'Sync blocked. Check the Firestore rules.':'Sync error: '+err.code)});
+  cloudPush=()=>{clearTimeout(timer);timer=setTimeout(push,300)};
+});
+
+async function go(create){
+  gErr.textContent='';
+  const e=$('#gEmail').value.trim(),p=$('#gPass').value;
+  if(!e||!p){gErr.textContent='Enter an email and password.';return}
+  $('#gIn').disabled=$('#gNew').disabled=true;
+  try{await (create?createUserWithEmailAndPassword:signInWithEmailAndPassword)(auth,e,p);$('#gPass').value=''}
+  catch(err){gErr.textContent=MSG[err.code]||('Could not sign in ('+(err.code||'error')+').')}
+  $('#gIn').disabled=$('#gNew').disabled=false;
+}
+$('#gForm').addEventListener('submit',ev=>{ev.preventDefault();go(false)});
+$('#gNew').onclick=()=>go(true);
+$('#gSkip').onclick=()=>{localStorage.setItem('pantry-skip','1');showGate(false)};
+$('#authBtn').onclick=async()=>{
+  if(auth.currentUser){
+    if(!confirm('Sign out? This clears the list from this device. It stays safe in your account.'))return;
+    await signOut(auth);items=[];try{localStorage.removeItem(KEY)}catch{}render();
+  }else{localStorage.removeItem('pantry-skip');showGate(true)}
+};
 </script>
 </body>
 </html>
